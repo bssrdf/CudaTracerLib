@@ -1,7 +1,7 @@
 //This is an example renderer using the library.
 //All that is done here is using the Mitsuba loader to load a scene and render a number of passes with a specified integrator.
-
 #include <StdAfx.h>
+#include <iostream>
 #include <algorithm>
 #include <filesystem.h>
 #include <cctype>
@@ -21,7 +21,70 @@
 #include <Kernel/ImagePipeline/ImagePipeline.h>
 #include <Engine/SceneLoader/Mitsuba/MitsubaLoader.h>
 
+
+#ifdef _WIN32
+#include <windows.h>
+#include <GL/glew.h>
+#include <sstream>
+#else
+#define GL_GLEXT_PROTOTYPES
+#include <GL/glew.h>
+#include <GL/gl.h>
+#endif
+
+#include <GL/freeglut.h>
+
+#define GL_GLEXT_PROTOTYPES
+#include <GL/gl.h>
+//https://stackoverflow.com/questions/33990387/mvs2015-keeps-giving-unresolved-externals-error-with-sdl2
+#define SDL_MAIN_HANDLED
+#include <SDL2/SDL.h>
+
 using namespace CudaTracerLib;
+
+SDL_Window *sdl_window;
+
+int width = 1024;
+int height = 1024;
+
+// The CUDA kernels will draw directly inside an OpenGL buffer (PBO)
+// which will be displayed via an OpenGL texture.
+
+// OpenGL buffer and texture helper functions
+
+void create_buffer(GLuint* buffer)
+{
+	glGenBuffersARB(1, buffer);
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, *buffer);
+	glBufferData(GL_PIXEL_PACK_BUFFER, width*height*4, NULL, GL_DYNAMIC_DRAW);
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+}
+
+void destroy_buffer(GLuint* buffer)
+{
+	glBindBuffer(GL_TEXTURE_2D, 0);
+	glDeleteBuffers(1, buffer);
+	*buffer = 0;
+}
+
+void create_texture(GLuint* tex)
+{
+	glGenTextures(1, tex);
+	glBindTexture(GL_TEXTURE_2D, *tex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void destroy_texture(GLuint* tex)
+{
+	glBindTexture(GL_TEXTURE_2D, *tex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glDeleteTextures(1, tex);
+}
+
 
 class SimpleFileManager : public IFileManager
 {
@@ -140,7 +203,7 @@ int main(int ac, char** av)
     auto options = opt_options.value();
 
 
-    int width = 1024, height = 1024;
+    //int width = 1024, height = 1024;
     const float fov = 90;
     InitializeCuda4Tracer(options.data_path);
     SimpleFileManager fManager = { options.data_path };
@@ -155,6 +218,28 @@ int main(int ac, char** av)
         height = img_size.value().y;
     }
 
+	if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+		std::cout << "SDL_Init Error: " << SDL_GetError() << std::endl;
+		return 1;
+	}
+
+	sdl_window = SDL_CreateWindow(
+		"An SDL2 window",                  // window title
+		SDL_WINDOWPOS_UNDEFINED,           // initial x position
+		SDL_WINDOWPOS_UNDEFINED,           // initial y position
+		width,                               // width, in pixels
+		height,                               // height, in pixels
+		SDL_WINDOW_OPENGL                  // flags - see below
+	);
+		
+	if (sdl_window == NULL){
+		std::cout << "Couldn't set video mode: " << SDL_GetError() << std::endl;
+		return 1;
+	}		
+
+	// Create an OpenGL context associated with the window.
+	SDL_GLContext glcontext = SDL_GL_CreateContext(sdl_window);
+	
     Image outImage(width, height);
 
     options.tracer->Resize(width, height);
@@ -175,6 +260,15 @@ int main(int ac, char** av)
 
     outImage.Free();
     DeInitializeCuda4Tracer();
+
+	// Once finished with OpenGL functions, the SDL_GLContext can be deleted.
+	SDL_GL_DeleteContext(glcontext);
+
+	SDL_DestroyWindow(sdl_window);
+
+	// Clean up
+	SDL_Quit();
+
 
     return 0;
 }
